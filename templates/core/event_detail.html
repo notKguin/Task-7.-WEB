@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ event.title }}{% endblock %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-12 col-lg-8">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h1 class="h3">{{ event.title }}</h1>
+        <div class="text-muted mb-3">
+          {{ event.location }} • {{ event.starts_at|date:"d.m.Y H:i" }} — {{ event.ends_at|date:"d.m.Y H:i" }}
+        </div>
+        <p>{{ event.description }}</p>
+
+        <div class="d-flex gap-2 flex-wrap align-items-center mt-4">
+          <span class="badge text-bg-secondary">❤ {{ event.likes_count }}</span>
+
+          {% if user.is_authenticated %}
+            <form method="post" action="{% url 'events:like' event.id %}">
+              {% csrf_token %}
+              <button class="btn btn-outline-danger" type="submit">
+                {% if liked %}Убрать лайк{% else %}Лайк{% endif %}
+              </button>
+            </form>
+
+            {% if existing_app %}
+              <span class="badge text-bg-info">Заявка: {{ existing_app.get_status_display }}</span>
+              <span class="text-muted small">обновлено {{ existing_app.updated_at|date:"d.m.Y H:i" }}</span>
+            {% else %}
+              <a class="btn btn-success" href="{% url 'events:apply' event.id %}">Подать заявку</a>
+            {% endif %}
+          {% else %}
+            <div class="alert alert-info mb-0">
+              Чтобы подать заявку или поставить лайк — <a href="{% url 'login' %}">войдите</a>.
+            </div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="card-footer text-muted small">
+        Контент обновлён: {{ event.updated_at|date:"d.m.Y H:i" }}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-lg-4">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h2 class="h5">Служебная информация</h2>
+        <ul class="small mb-0">
+          <li>ID: {{ event.id }}</li>
+          <li>Создано: {{ event.created_at|date:"d.m.Y H:i" }}</li>
+          <li>Обновлено: {{ event.updated_at|date:"d.m.Y H:i" }}</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
