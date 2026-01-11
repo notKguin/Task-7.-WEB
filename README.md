@@ -1,35 +1,45 @@
-# VolunteerEvents (Django + PostgreSQL + Docker)
+# Volunteer Service (Django + PostgreSQL + Docker)
 
-Веб‑приложение по предметной области **«Заявка на мероприятие в роли волонтёра»**.
+Веб‑приложение: **заявки на участие в мероприятиях в роли волонтёра** + **лайки**.
+Реализовано:
+- PostgreSQL (минимум 3 связанных таблицы: `Category`, `Event`, `VolunteerApplication`, `EventLike`)
+- Абстрактная базовая модель с `created_at`, `updated_at`
+- Роли: Гость (без авторизации), Зарегистрированный пользователь, Администратор (Django admin)
+- Основной сервис: подача заявки на мероприятие
+- Доп. функционал: лайк мероприятия
+- Админка: экспорт данных в **XLSX** с выбором **таблиц** и **полей**
+- Docker / docker-compose
+- Static + Media (изображения), отображаются корректно
+- Безопасность: ORM (SQLi), autoescape шаблонов (XSS), CSRF protection (POST)
 
-## Функционал
-- PostgreSQL БД с 4 связанными таблицами: `accounts_user`, `core_event`, `core_volunteerapplication`, `core_like`
-- Общие поля `created_at` / `updated_at` вынесены в абстрактную модель `TimeStampedModel`
-- Регистрация/авторизация (гость/пользователь/админ)
-- Основная услуга: подача заявки волонтёра на мероприятие
-- Доп. функционал: поиск/фильтрация/сортировка + собственный REST API (DRF)
-- Админ‑панель: Django admin + отдельная страница экспорта XLSX с выбором таблицы и полей
+## Быстрый старт (Docker)
 
-## Запуск в Docker
+1) Скопируйте `.env.example` в `.env` и при необходимости измените значения:
 ```bash
-docker compose up -d --build
-docker compose exec web python manage.py migrate
-docker compose exec web python manage.py seed_demo
+cp .env.example .env
 ```
 
-Открыть: http://localhost:8000/
+2) Сборка и запуск:
+```bash
+docker compose up --build
+```
 
-Демо‑аккаунты (создаются командой `seed_demo`):
-- admin: `admin@example.com` / `admin123` (доступ к /admin/ и экспорту)
-- user: `user@example.com` / `user123`
+3) Миграции и суперпользователь (в другом терминале):
+```bash
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py createsuperuser
+```
 
-## Экспорт XLSX
-Доступен только staff‑пользователям:
-- страница: `/admin-tools/export/`
-- можно выбрать модель (таблицу) и нужные поля, получить `.xlsx`
+4) Открыть:
+- Приложение: http://localhost:8000/
+- Админка: http://localhost:8000/admin/
 
-## REST API
-- `/api/events/` (GET/POST для staff)
-- `/api/events/<id>/` (GET/PUT/PATCH/DELETE для staff)
-- `/api/applications/` (GET/POST авторизованным)
-- `/api/likes/` (GET/POST авторизованным)
+## Демо‑данные
+После запуска зайдите в админку и создайте:
+- Category
+- Event (можно добавить изображение)
+Затем пользователи смогут лайкать и подавать заявки.
+
+## Важно
+- Пароли хранятся в зашифрованном виде штатными механизмами Django (`pbkdf2` по умолчанию).
+- Для production замените `DEBUG=0`, задайте `SECRET_KEY`, настройте `ALLOWED_HOSTS`.
