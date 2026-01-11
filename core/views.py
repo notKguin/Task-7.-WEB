@@ -1,127 +1,131 @@
 from __future__ import annotations
 
 from django.contrib import messages
-from django.contrib.auth import login
-from django.contrib.auth.decorators import login_required
-from django.db.models import Count
+from django.contrib.auth.decorators import login_required, user_passes_test
+from django.db.models import Count, Exists, OuterRef, Q
 from django.http import HttpRequest, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
-from django.views.decorators.http import require_POST
+from django.urls import reverse
 
-from .forms import SignUpForm, VolunteerApplicationForm
-from .models import Event, VolunteerApplication, EventLike
+from .forms import ApplicationForm
+from .models import Event, VolunteerApplication, Like
+from .services.xlsx_export import ExportService
 
 
 def event_list(request: HttpRequest) -> HttpResponse:
-    # Гость может смотреть список
-    events = (
-        Event.objects
-        .select_related("category")
-        .annotate(
-            likes_count=Count("likes", distinct=True),
-            applications_count=Count("applications", distinct=True),
-        )
-        .order_by("-event_date")
+    q = (request.GET.get("q") or "").strip()
+    location = (request.GET.get("location") or "").strip()
+    sort = (request.GET.get("sort") or "").strip()  # starts, -starts, likes
+
+    events = Event.objects.all().annotate(
+        likes_count=Count("likes", distinct=True),
     )
-    return render(request, "events/event_list.html", {"events": events})
+
+    if q:
+        events = events.filter(Q(title__icontains=q) | Q(description__icontains=q))
+    if location:
+        events = events.filter(location__icontains=location)
+
+    if sort == "starts":
+        events = events.order_by("starts_at")
+    elif sort == "-starts":
+        events = events.order_by("-starts_at")
+    elif sort == "likes":
+        events = events.order_by("-likes_count", "-starts_at")
+
+    user_likes = set()
+    if request.user.is_authenticated:
+        user_likes = set(Like.objects.filter(user=request.user).values_list("event_id", flat=True))
+
+    ctx = {
+        "events": events,
+        "q": q,
+        "location": location,
+        "sort": sort,
+        "user_likes": user_likes,
+    }
+    return render(request, "core/event_list.html", ctx)
 
 
 def event_detail(request: HttpRequest, pk: int) -> HttpResponse:
-    event = (
-        Event.objects
-        .select_related("category")
-        .annotate(
-            likes_count=Count("likes", distinct=True),
-            applications_count=Count("applications", distinct=True),
-        )
-        .filter(pk=pk)
-        .first()
-    )
-    if not event:
-        event = get_object_or_404(Event, pk=pk)
+    event = get_object_or_404(Event.objects.annotate(likes_count=Count("likes")), pk=pk)
+
+    existing_app = None
+    if request.user.is_authenticated:
+        existing_app = VolunteerApplication.objects.filter(user=request.user, event=event).first()
 
     liked = False
-    application = None
     if request.user.is_authenticated:
-        liked = EventLike.objects.filter(user=request.user, event=event).exists()
-        application = VolunteerApplication.objects.filter(user=request.user, event=event).first()
+        liked = Like.objects.filter(user=request.user, event=event).exists()
 
-    form = VolunteerApplicationForm()
     return render(
         request,
-        "events/event_detail.html",
-        {
-            "event": event,
-            "liked": liked,
-            "application": application,
-            "form": form,
-        },
+        "core/event_detail.html",
+        {"event": event, "existing_app": existing_app, "liked": liked},
     )
 
 
 @login_required
-def apply_to_event(request: HttpRequest, pk: int) -> HttpResponse:
+def apply_event(request: HttpRequest, pk: int) -> HttpResponse:
     event = get_object_or_404(Event, pk=pk)
 
-    # Если заявка уже есть — не создаём повторно
-    existing = VolunteerApplication.objects.filter(user=request.user, event=event).first()
-    if existing:
+    if VolunteerApplication.objects.filter(user=request.user, event=event).exists():
         messages.info(request, "Вы уже подали заявку на это мероприятие.")
-        return redirect("event_detail", pk=event.pk)
+        return redirect("events:detail", pk=pk)
 
     if request.method == "POST":
-        form = VolunteerApplicationForm(request.POST)
+        form = ApplicationForm(request.POST)
         if form.is_valid():
-            obj = form.save(commit=False)
-            obj.user = request.user
-            obj.event = event
-            obj.save()
-            messages.success(request, "Заявка отправлена! Ожидайте решения организатора.")
-            return redirect("event_detail", pk=event.pk)
+            app = form.save(commit=False)
+            app.user = request.user
+            app.event = event
+            app.save()
+            messages.success(request, "Заявка отправлена и ожидает рассмотрения.")
+            return redirect("events:detail", pk=pk)
     else:
-        form = VolunteerApplicationForm()
+        form = ApplicationForm()
 
-    return render(request, "events/apply.html", {"event": event, "form": form})
+    return render(request, "core/apply.html", {"event": event, "form": form})
 
 
 @login_required
-@require_POST
 def toggle_like(request: HttpRequest, pk: int) -> HttpResponse:
+    if request.method != "POST":
+        return redirect("events:detail", pk=pk)
+
     event = get_object_or_404(Event, pk=pk)
-    like = EventLike.objects.filter(user=request.user, event=event).first()
+    like = Like.objects.filter(user=request.user, event=event).first()
     if like:
         like.delete()
         messages.info(request, "Лайк убран.")
     else:
-        EventLike.objects.create(user=request.user, event=event)
-        messages.success(request, "Спасибо за поддержку! Лайк добавлен.")
-    return redirect("event_detail", pk=event.pk)
+        Like.objects.create(user=request.user, event=event)
+        messages.success(request, "Спасибо за поддержку!")
+    return redirect(request.META.get("HTTP_REFERER") or reverse("events:detail", kwargs={"pk": pk}))
 
 
-def signup(request: HttpRequest) -> HttpResponse:
-    if request.user.is_authenticated:
-        return redirect("event_list")
+def is_staff(user) -> bool:
+    return user.is_staff or user.is_superuser
 
+
+@user_passes_test(is_staff)
+def export_xlsx(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
-        form = SignUpForm(request.POST)
-        if form.is_valid():
-            user = form.save()
-            login(request, user)
-            messages.success(request, "Регистрация успешна. Добро пожаловать!")
-            return redirect("event_list")
-    else:
-        form = SignUpForm()
+        model_key = request.POST.get("model") or ""
+        fields = request.POST.getlist("fields") or []
+        try:
+            service = ExportService()
+            content, filename = service.build_xlsx(model_key=model_key, fields=fields)
+        except ValueError as e:
+            messages.error(request, str(e))
+            return redirect("events:export")
 
-    return render(request, "auth/signup.html", {"form": form})
+        resp = HttpResponse(
+            content,
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        resp["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return resp
 
-
-@login_required
-def my_dashboard(request: HttpRequest) -> HttpResponse:
-    applications = (
-        VolunteerApplication.objects
-        .select_related("event", "event__category")
-        .filter(user=request.user)
-        .order_by("-created_at")
-    )
-    likes = EventLike.objects.select_related("event").filter(user=request.user).order_by("-created_at")
-    return render(request, "profile/dashboard.html", {"applications": applications, "likes": likes})
+    service = ExportService()
+    return render(request, "core/export.html", {"models": service.get_models()})
