@@ -4,21 +4,38 @@
 {% block content %}
   <h1>Экспорт XLSX</h1>
   <p class="help">
-    Выберите таблицы (модели).
+    1) Выберите таблицу (модель)<br>
+    2) Нажмите «Показать поля»<br>
+    3) Отметьте нужные поля и скачайте XLSX
   </p>
 
   <form method="post" novalidate>
     {% csrf_token %}
+
     <fieldset class="module aligned">
       <div class="form-row">
-        {{ form.models.errors }}
-        <div><label><b>{{ form.models.label }}</b></label></div>
-        <div>{{ form.models }}</div>
+        {{ form.model.errors }}
+        <div><label><b>{{ form.model.label }}</b></label></div>
+        <div>{{ form.model }}</div>
+      </div>
+
+      <div class="form-row">
+        {{ form.fields.errors }}
+        <div><label><b>{{ form.fields.label }}</b></label></div>
+        <div>
+          {% if form.fields.field.choices %}
+            {{ form.fields }}
+            <p class="help">Если ничего не выбрать — выгрузятся все поля.</p>
+          {% else %}
+            <p class="help">Сначала выберите модель и нажмите «Показать поля».</p>
+          {% endif %}
+        </div>
       </div>
     </fieldset>
 
     <div class="submit-row">
-      <input type="submit" value="Скачать XLSX" class="default">
+      <input type="submit" name="preview" value="Показать поля" class="button">
+      <input type="submit" name="download" value="Скачать XLSX" class="default">
       <a class="button" href="/admin/">Назад</a>
     </div>
   </form>

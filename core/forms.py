@@ -26,10 +26,21 @@ class VolunteerApplicationForm(forms.ModelForm):
 
 
 class AdminExportForm(forms.Form):
-    """Форма экспорта: выбрать таблицы (модели). Поля берутся как в админке (list_display)."""
-    models = forms.MultipleChoiceField(
-        label="Таблицы (модели)",
+    """
+    Экспорт XLSX:
+    1) выбрать модель
+    2) выбрать поля (колонки) для выгрузки
+       (по умолчанию — все доступные колонки)
+    """
+    model = forms.ChoiceField(
+        label="Таблица (модель)",
         required=True,
+        choices=[],  # заполняется в admin.py
+    )
+
+    fields = forms.MultipleChoiceField(
+        label="Поля для выгрузки",
+        required=False,  # пусто = выгрузить всё
         widget=forms.CheckboxSelectMultiple,
-        choices=[],
+        choices=[],  # заполняется в admin.py после выбора модели
     )

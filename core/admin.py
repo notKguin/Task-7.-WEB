@@ -1,3 +1,4 @@
+# core/admin.py
 from __future__ import annotations
 
 from typing import Any
@@ -55,17 +56,14 @@ def _format_admin_value(value: Any) -> Any:
         return str(value)
 
     # datetime/date: локализованный формат как в админке
-    if hasattr(value, "tzinfo") and hasattr(value, "year") and hasattr(value, "month"):
+    if hasattr(value, "strftime"):
         try:
-            return formats.date_format(value, format="DATETIME_FORMAT", use_l10n=True)
+            return formats.localize(value)
         except Exception:
-            return value.isoformat(sep=" ", timespec="seconds")
+            return str(value)
 
-    if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day") and not hasattr(value, "hour"):
-        try:
-            return formats.date_format(value, format="DATE_FORMAT", use_l10n=True)
-        except Exception:
-            return value.isoformat()
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(x) for x in value)
 
     return value
 
@@ -74,6 +72,9 @@ def _get_admin_columns_and_headers(
     request: HttpRequest,
     model_admin: admin.ModelAdmin,
 ) -> tuple[list[str], list[str]]:
+    """
+    Базовые колонки (как в list_display) + заголовки.
+    """
     columns = list(model_admin.get_list_display(request))
     headers: list[str] = []
 
@@ -85,6 +86,20 @@ def _get_admin_columns_and_headers(
         headers.append(str(header))
 
     return columns, headers
+
+
+def _get_fields_choices_for_model(
+    request: HttpRequest,
+    model_admin: admin.ModelAdmin,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """
+    Возвращает:
+    - choices для чекбоксов: (column_name, header)
+    - список всех column_name (для initial)
+    """
+    columns, headers = _get_admin_columns_and_headers(request, model_admin)
+    choices = list(zip(columns, headers))
+    return choices, columns
 
 
 def _get_admin_row_values(
@@ -109,13 +124,14 @@ def _get_admin_row_values(
 
 def export_xlsx_view(request: HttpRequest) -> HttpResponse:
     """
-    Экспорт XLSX по колонкам list_display (как в админке).
-    Доступ: staff/superuser.
+    Экспорт XLSX:
+    - выбираем одну модель
+    - выбираем набор колонок (list_display)
     """
     if not request.user.is_authenticated or not request.user.is_staff:
         return HttpResponse("Forbidden", status=403)
 
-    # Берём текущие ModelAdmin из стандартного admin.site
+    # текущие ModelAdmin из стандартного admin.site
     model_admin_map: dict[str, admin.ModelAdmin] = {
         "core.Category": admin.site._registry.get(Category),
         "core.Event": admin.site._registry.get(Event),
@@ -124,55 +140,90 @@ def export_xlsx_view(request: HttpRequest) -> HttpResponse:
     }
     model_admin_map = {k: v for k, v in model_admin_map.items() if v is not None}
 
-    form = AdminExportForm()
-    form.fields["models"].choices = [(k, k) for k in model_admin_map.keys()]
+    # --- Формирование формы ---
+    form = AdminExportForm(request.POST or None)
+    form.fields["model"].choices = [(k, k) for k in model_admin_map.keys()]
 
+    selected_model_label = None
+    selected_model_admin: admin.ModelAdmin | None = None
+
+    # берём выбранную модель (из POST, если есть)
     if request.method == "POST":
-        form = AdminExportForm(request.POST)
-        form.fields["models"].choices = [(k, k) for k in model_admin_map.keys()]
+        selected_model_label = request.POST.get("model") or None
+    else:
+        # на случай, если захочешь потом сделать выбор через GET — можно расширить
+        selected_model_label = None
 
-        if form.is_valid():
-            selected_models = form.cleaned_data["models"]
+    if selected_model_label and selected_model_label in model_admin_map:
+        selected_model_admin = model_admin_map[selected_model_label]
 
-            wb = Workbook()
-            default_ws = wb.active
-            wb.remove(default_ws)
+        # заполняем choices для полей
+        field_choices, all_columns = _get_fields_choices_for_model(request, selected_model_admin)
+        form.fields["fields"].choices = field_choices
 
-            for model_label in selected_models:
-                model_admin = model_admin_map.get(model_label)
-                if not model_admin:
-                    continue
+        # если это первый показ после выбора модели — по умолчанию отмечаем все
+        if request.method != "POST" or ("preview" in request.POST and not request.POST.getlist("fields")):
+            form.initial["fields"] = all_columns
 
-                # (опционально) строгая проверка прав на модель
-                app_label = model_admin.model._meta.app_label
-                model_name = model_admin.model._meta.model_name
-                perm = f"{app_label}.view_{model_name}"
-                if not (request.user.is_superuser or request.user.has_perm(perm)):
-                    continue
+    # --- POST обработка ---
+    if request.method == "POST" and form.is_valid():
+        selected_model_label = form.cleaned_data["model"]
+        selected_model_admin = model_admin_map.get(selected_model_label)
 
-                columns, headers = _get_admin_columns_and_headers(request, model_admin)
+        if selected_model_admin is None:
+            return TemplateResponse(request, "admin/export_xlsx.html", {"form": form})
 
-                ws = wb.create_sheet(title=model_label.split(".")[-1][:31])
-                ws.append(headers)
+        # права на просмотр модели
+        app_label = selected_model_admin.model._meta.app_label
+        model_name = selected_model_admin.model._meta.model_name
+        perm = f"{app_label}.view_{model_name}"
+        if not (request.user.is_superuser or request.user.has_perm(perm)):
+            return HttpResponse("Forbidden", status=403)
 
-                qs = model_admin.get_queryset(request).order_by("id")[:5000]
-                for obj in qs:
-                    ws.append(_get_admin_row_values(model_admin, obj, columns))
+        # если нажали "Показать поля" — просто перерендерим форму (без скачивания)
+        if "preview" in request.POST and "download" not in request.POST:
+            # подсветить все поля по умолчанию (если ещё не выбраны)
+            if not form.cleaned_data.get("fields"):
+                _, all_columns = _get_fields_choices_for_model(request, selected_model_admin)
+                form.initial["fields"] = all_columns
+            return TemplateResponse(request, "admin/export_xlsx.html", {"form": form})
 
-                for i, header in enumerate(headers, start=1):
-                    ws.column_dimensions[get_column_letter(i)].width = max(12, min(45, len(str(header)) + 6))
+        # если нажали "Скачать"
+        selected_fields: list[str] = form.cleaned_data.get("fields") or []
+        all_columns, all_headers = _get_admin_columns_and_headers(request, selected_model_admin)
 
-            resp = HttpResponse(
-                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            resp["Content-Disposition"] = 'attachment; filename="export.xlsx"'
-            wb.save(resp)
-            return resp
+        if selected_fields:
+            # оставляем только выбранные, сохраняя порядок list_display
+            columns = [c for c in all_columns if c in set(selected_fields)]
+        else:
+            # если ничего не выбрано — выгружаем все
+            columns = all_columns
+
+        # заголовки под выбранные колонки
+        headers_map = dict(zip(all_columns, all_headers))
+        headers = [headers_map.get(c, c) for c in columns]
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = selected_model_label.split(".")[-1][:31]
+
+        ws.append(headers)
+
+        qs = selected_model_admin.get_queryset(request).order_by("id")[:5000]
+        for obj in qs:
+            ws.append(_get_admin_row_values(selected_model_admin, obj, columns))
+
+        for i, header in enumerate(headers, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = max(12, min(45, len(str(header)) + 6))
+
+        resp = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        resp["Content-Disposition"] = 'attachment; filename="export.xlsx"'
+        wb.save(resp)
+        return resp
 
     return TemplateResponse(request, "admin/export_xlsx.html", {"form": form})
 
 
-# ✅ Главное: НЕ подменяем admin.site целиком.
 # Просто добавляем URL в существующий admin.site через обёртку.
 _original_get_urls = admin.site.get_urls
 

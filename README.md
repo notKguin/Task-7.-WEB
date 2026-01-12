@@ -43,3 +43,8 @@ docker compose exec web python manage.py createsuperuser
 ## Важно
 - Пароли хранятся в зашифрованном виде штатными механизмами Django (`pbkdf2` по умолчанию).
 - Для production замените `DEBUG=0`, задайте `SECRET_KEY`, настройте `ALLOWED_HOSTS`.
+
+## Безопасность
+- SQL-инъекции: ORM-запросы (filter, get_object_or_404, select_related, annotate) → параметризация → защита от SQLi.
+- XSS: Django autoescape в шаблонах, нет |safe/autoescape off → защита от XSS при выводе текстовых полей.
+- Дополнительно: CSRF-токены в формах и @require_POST для state-changing endpoints.
