@@ -26,7 +26,11 @@
               <li class="nav-item"><a class="nav-link" href="/admin/">Админка</a></li>
               <li class="nav-item"><a class="nav-link" href="/admin/export-xlsx/">Экспорт XLSX</a></li>
             {% endif %}
-            <li class="nav-item"><a class="nav-link" href="{% url 'logout' %}">Выйти</a></li>
+              <li class="nav-item">
+                  <form method="post" action="{% url 'logout' %}">
+                      {% csrf_token %}<button type="submit" class="nav-link">Выйти</button>
+                  </form>
+              </li>
           {% else %}
             <li class="nav-item"><a class="nav-link" href="{% url 'login' %}">Войти</a></li>
             <li class="nav-item"><a class="nav-link" href="{% url 'signup' %}">Регистрация</a></li>
