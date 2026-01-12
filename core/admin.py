@@ -151,7 +151,6 @@ def export_xlsx_view(request: HttpRequest) -> HttpResponse:
     if request.method == "POST":
         selected_model_label = request.POST.get("model") or None
     else:
-        # на случай, если захочешь потом сделать выбор через GET — можно расширить
         selected_model_label = None
 
     if selected_model_label and selected_model_label in model_admin_map:

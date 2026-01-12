@@ -11,6 +11,11 @@ from django.views.decorators.http import require_POST
 from .forms import SignUpForm, VolunteerApplicationForm
 from .models import Event, VolunteerApplication, EventLike
 
+from django.http import HttpRequest, HttpResponse
+from django.shortcuts import render
+
+def custom_404_view(request: HttpRequest, exception) -> HttpResponse:
+    return render(request, "errors/404.html", status=404)
 
 def event_list(request: HttpRequest) -> HttpResponse:
     # Гость может смотреть список
